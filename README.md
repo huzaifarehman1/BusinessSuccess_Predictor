@@ -1,5 +1,5 @@
 # BusinessSuccess_Predictor
-this is a Bayesian network that predicts the probabbility of your
+this is a Bayesian network that predicts the probability of your
 businuess success 
 
 ## Note:

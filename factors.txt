@@ -1,3 +1,12 @@
 following are the factors on which the project is based
 
-1:
+1:(GDP) higher gdp means better state of the business it influence market as well as success 
+2:(popularity) a guess is good enough for it influences on market it is the same as compietition
+3:(Market):influenced by 1 and 2 and it directly influence success
+4:(how much love for it): a guess is good enough for it to influence hardwork factor
+5:(previous number of business success): it influence hardwork factor
+6:(Hardwork):influenced by 4 and 5 and influence directly success
+7:(Have a job and salary): influence input investment part 
+8:(loan?):influence input investment part and is influenced by 7
+9:(input investment):influenced by 7 and 8 and influence directly success
+10:(success):influenced by 3,6,9,1

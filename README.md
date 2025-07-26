@@ -5,4 +5,5 @@ businuess success
 ## Note:
 To see these factors on which these depend see the factors.txt file
 
-country.json :> contian gdp of countries
+country.json :> contian gdp of countries max for a ledger
+factors.txt :> contain all node of Bayesain networks

@@ -1,7 +1,10 @@
 import json
 import pyro
-from pyro.distributions import Bernoulli
+from pyro.distributions import Bernoulli,constraints,Beta
+from pyro.infer import SVI, Trace_ELBO
+from pyro.optim import Adam
 import torch
+
 #(i / x) * 100 >gdp
 class DATA:
     def __init__(self):
@@ -124,7 +127,46 @@ class mainpart:
         self.have_job = job #0 or 1
         self.loan = loan #0 or 1
         self.choice = choice #1,2,3,4,5
-        self.love = love
+        if love<50:
+            accuracy = 5
+        else:
+            accuracy = 15    
+        self.love = self.do_svi_for_love(love,accuracy,2000)
+        self.prev_success = self.do_svi_for_prev_success()
+
+    
+    def do_svi_for_love(self,observed,accuracy,steps=3000):
+        
+        #model part
+        def make_model(observed, accuracy):
+            def modelEXE():
+                true_prob = pyro.sample("P_love", Beta(2.0, 2.0))
+                
+                # We assume observed proportion is a noisy measurement of the true probability
+                # So we model it as Beta-distributed around true_prob (with fixed concentration)
+                pyro.sample("observed_P_love", Beta(true_prob * accuracy, (1 - true_prob) * accuracy),  # 20 = confidence in proportion
+                                    obs=torch.tensor(observed))  # the observed proportion (e.g., 79%)
+            return modelEXE
+        #guide part
+        def guideEXE():
+            alpha_q = pyro.param("alpha_P_love", torch.tensor(2.0), constraint=constraints.positive)
+            beta_q = pyro.param("beta_P_love", torch.tensor(2.0), constraint=constraints.positive)
+            pyro.sample("P_love", Beta(alpha_q, beta_q))
+            pyro.clear_param_store()
+        #svi part
+        modelEXE = make_model(observed, accuracy)
+        svi = SVI(model=modelEXE, guide=guideEXE,
+                optim=Adam({"lr": 0.01}), loss=Trace_ELBO())
+
+        for _ in range(steps):
+            svi.step()
+
+        alpha_val = pyro.param("alpha").item()
+        beta_val = pyro.param("beta").item()
+        posterior = Beta(alpha_val, beta_val)
+        sample_p = posterior.sample()
+        return sample_p
+        
     def network(self):
         job = pyro.sample("job", Bernoulli(0.6), obs=torch.tensor(self.have_job)) 
         P_loan = torch.where(job==torch.tensor(1.0),0.4,0.6)
@@ -139,8 +181,12 @@ class mainpart:
         P_popularity = [None,0.3,0.4,0.7,0.4,0.4][self.choice]
         popularity = pyro.sample("popularity",Bernoulli(P_popularity))
         
-        P_love = None
+        P_love = self.love
         love = pyro.sample("love",Bernoulli(P_love))
+        
+        P_prev_success = None
+        prev_success = pyro.sample("prev_success",P_prev_success)
+        cpt_hardwork = [[]]
         
         
         

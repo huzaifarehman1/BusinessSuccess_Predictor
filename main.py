@@ -9,9 +9,19 @@ import torch
 class DATA:
     def __init__(self):
         self.loadAllData()
+        self.love = round(self.take_loveforit()/100,4)
         self.country = self.take_country()
         self.popularity = self.take_popularity()
-        self.love = round(self.take_loveforit()/100,4)
+        if self.love<50:
+            accuracy = 5
+        else:
+            accuracy = 15    
+        self.love = self.do_svi_for_love(self.love,accuracy,2000)
+        self.prev_success = self.do_svi_for_prev_success()
+        self.job = self.have_job()
+        
+        
+        
         temp = self.take_previoussuccess()#total , success
         self.prev_success = (temp[1]/temp[0])
         
@@ -31,6 +41,7 @@ class DATA:
             return country
 
     def have_job(self):
+        job = [0,0]
         print("DO you have a job")
         while True:
             yesORno = input("yes or no ?").lower().replace(" ","")
@@ -39,12 +50,41 @@ class DATA:
                 continue    
             if yesORno=="yes":
                 yesORno = 1
-                #do this
-                
+                print("What is your income in dollors(monthly)")
+                while True:
+                    try:
+                        choice = float(input())
+                        if choice<0:
+                            print("number must be >= 0")    
+                        else:
+                            job[1] = choice    
+                            break
+                    except ValueError:
+                        print("only enter numbers")
+                    except Exception as e:
+                        print(e)
+                        print("Something went wrong") 
+                if job[1]<=85:
+                    job[1] = 1
+                elif job<=200:
+                    job[1] = 2
+                elif job<=500:
+                    job[1] = 3
+                elif job<=1200:
+                    job[1] = 4
+                else:
+                    job[1] = 5            
+                         
+
+                break        
                 
             else:
-                yesORno = 0     
-
+                yesORno = 0 
+                break
+                
+        job[0] = yesORno
+        return job
+    
     def take_popularity(self):
         print("what is the popularity of the business your doing as a whole")
         print("OPTIONS:")
@@ -121,20 +161,6 @@ class DATA:
                 print("Something went wrong")         
         return answer
 
-
-class mainpart:
-    def __init__(self,job,loan,choice,love):
-        self.have_job = job #0 or 1
-        self.loan = loan #0 or 1
-        self.choice = choice #1,2,3,4,5
-        if love<50:
-            accuracy = 5
-        else:
-            accuracy = 15    
-        self.love = self.do_svi_for_love(love,accuracy,2000)
-        self.prev_success = self.do_svi_for_prev_success()
-
-    
     def do_svi_for_love(self,observed,accuracy,steps=3000):
         
         #model part
@@ -161,14 +187,59 @@ class mainpart:
         for _ in range(steps):
             svi.step()
 
-        alpha_val = pyro.param("alpha").item()
-        beta_val = pyro.param("beta").item()
+        alpha_val = pyro.param("alpha_P_love").item()
+        beta_val = pyro.param("beta_P_love").item()
         posterior = Beta(alpha_val, beta_val)
         sample_p = posterior.sample()
         return sample_p
+
+
+    def do_svi_for_prev_success(self,observed,accuracy,steps=3000):
+        
+        #model part
+        def make_model(observed, accuracy):
+            def modelEXE():
+                true_prob = pyro.sample("P_prev_success", Beta(2.0, 2.0))
+                
+                # We assume observed proportion is a noisy measurement of the true probability
+                # So we model it as Beta-distributed around true_prob (with fixed concentration)
+                pyro.sample("observed_P_prev_success", Beta(true_prob * accuracy, (1 - true_prob) * accuracy),  # 20 = confidence in proportion
+                                    obs=torch.tensor(observed))  # the observed proportion (e.g., 79%)
+            return modelEXE
+        #guide part
+        def guideEXE():
+            alpha_q = pyro.param("alpha_P_prev_success", torch.tensor(2.0), constraint=constraints.positive)
+            beta_q = pyro.param("beta_P_prev_success", torch.tensor(2.0), constraint=constraints.positive)
+            pyro.sample("P_prev_success", Beta(alpha_q, beta_q))
+            pyro.clear_param_store()
+        #svi part
+        modelEXE = make_model(observed, accuracy)
+        svi = SVI(model=modelEXE, guide=guideEXE,
+                optim=Adam({"lr": 0.01}), loss=Trace_ELBO())
+
+        for _ in range(steps):
+            svi.step()
+
+        alpha_val = pyro.param("alpha_P_prev_success").item()
+        beta_val = pyro.param("beta_P_prev_success").item()
+        posterior = Beta(alpha_val, beta_val)
+        sample_p = posterior.sample()
+        return sample_p
+
+    
+class mainpart:
+    def __init__(self,job,loan,choice,love):
+        self.have_job = job #[have?,income]
+        self.loan = loan #0 or 1
+        self.choice = choice #1,2,3,4,5 #popularity
+        self.love = love
+
+    
+    
         
     def network(self):
-        job = pyro.sample("job", Bernoulli(0.6), obs=torch.tensor(self.have_job)) 
+        P_job = [0.3,0.45,0.56,0.66,0.8,0.91]#No job  poor mediumpoor middlefair middleupper upper
+        job = pyro.sample("job", Bernoulli(P_job), obs=torch.tensor(self.have_job)) 
         P_loan = torch.where(job==torch.tensor(1.0),0.4,0.6)
         loan = pyro.sample("loan",Bernoulli(P_loan),obs=torch.tensor(self.loan))#will he repay it
         i,j = int(job.item()),int(loan.item())

@@ -37,7 +37,7 @@ class DATA:
             return country
 
     def have_job(self):
-        job = [0,0]
+        job = 0
         print("DO you have a job")
         while True:
             yesORno = input("yes or no ?").lower().replace(" ","")
@@ -45,7 +45,6 @@ class DATA:
                 print("reply with only ",end="")
                 continue    
             if yesORno=="yes":
-                yesORno = 1
                 print("What is your income in dollors(monthly)")
                 while True:
                     try:
@@ -53,7 +52,7 @@ class DATA:
                         if choice<0:
                             print("number must be >= 0")    
                         else:
-                            job[1] = choice    
+                            job = choice    
                             break
                     except ValueError:
                         print("only enter numbers")
@@ -63,25 +62,25 @@ class DATA:
                 monthly_gdp = self.gdp / 12  # Convert total GDP to monthly
 
 
-                if job[1] <= 0.005 * monthly_gdp:        # Poor: ~0.5% of monthly GDP
-                    job[1] = 1
-                elif job[1] <= 0.015 * monthly_gdp:      # Lower-Middle: 1.5%
-                    job[1] = 2
-                elif job[1] <= 0.03 * monthly_gdp:       # Middle-Middle: 3%
-                    job[1] = 3
-                elif job[1] <= 0.06 * monthly_gdp:       # Upper-Middle: 6%
-                    job[1] = 4
+                if job <= 0.005 * monthly_gdp:        # Poor: ~0.5% of monthly GDP
+                    job = 1
+                elif job <= 0.015 * monthly_gdp:      # Lower-Middle: 1.5%
+                    job = 2
+                elif job <= 0.03 * monthly_gdp:       # Middle-Middle: 3%
+                    job = 3
+                elif job <= 0.06 * monthly_gdp:       # Upper-Middle: 6%
+                    job = 4
                 else:                                    # Rich: more than 6% of monthly GDP
-                    job[1] = 5         
+                    job = 5         
                          
 
                 break        
                 
             else:
-                yesORno = 0 
+                yesORno = 0
+                job = yesORno 
                 break
                 
-        job[0] = yesORno
         return job
     
     def take_popularity(self):
@@ -225,7 +224,7 @@ class DATA:
     
 class mainpart:
     def __init__(self,job,loan,choice,love,gdp,prev_success):
-        self.have_job = job #[have?,income]
+        self.have_job = job #0
         self.loan = loan #0 or 1
         self.choice = choice #1,2,3,4,5 #popularity
         self.love = love
@@ -236,7 +235,11 @@ class mainpart:
     
         
     def network(self):
-        P_job = [0.3,0.45,0.56,0.66,0.8,0.91]#No job  poor mediumpoor middlefair middleupper upper
+        P_job_table = [0.3,0.45,0.56,0.66,0.8,0.91]#No job  poor mediumpoor middlefair middleupper upper
+        if self.have_job[0]==0:
+            P_job = P_job_table[0]
+        else:
+            P_job = P_job_table[1]    
         job = pyro.sample("job", Bernoulli(P_job), obs=torch.tensor(self.have_job)) 
         
         P_loan = torch.where(job==torch.tensor(1.0),0.4,0.6)
@@ -248,6 +251,7 @@ class mainpart:
         input_investment = pyro.sample("investment",Bernoulli(P_investment))
         
         
+        
         P_love = self.love
         love = pyro.sample("love",Bernoulli(P_love))
         
@@ -256,6 +260,9 @@ class mainpart:
         
         i,j = int(love.item()),int(prev_success.item())
         cpt_hardwork = [[0.40,0.60],[0.54,0.67]]
+        P_hardwork = cpt_hardwork[i][j]
+        hardwork = pyro.sample("hardwork",Bernoulli(P_hardwork))        
+        
         
         
         P_popularity = [None,0.3,0.4,0.7,0.4,0.4][self.choice] #none is just a place holder
@@ -263,10 +270,28 @@ class mainpart:
         P_gdp = (self.gdp[0]/self.gdp[1]) # gdp/max  
         gdp = pyro.sample("gdp",Bernoulli(P_gdp))
         
-        i,j = int(popularity.item()),int(gdp.item())
+        gdp_value,j = int(popularity.item()),int(gdp.item())
         cpt_market = [[0.23,0.5],[0.47,0.71]]
-        P_market = cpt_market[j][i]
+        P_market = cpt_market[j][gdp_value]
         market = pyro.sample("market",Bernoulli(P_market))
+        
+        i,j,k = int(market.item()),int(hardwork.item()),int(input_investment.item())
+        cpt_success = []
+        P_success = cpt_success[i][j][k]
+        success = pyro.sample("success",Bernoulli(P_success))
+        
+        return {
+            "job": job.item(),
+            "loan": loan.item(),
+            "investment": input_investment.item(),
+            "love": love.item(),
+            "prev_success": prev_success.item(),
+            "hardwork": hardwork.item(),
+            "popularity": popularity.item(),
+            "gdp": gdp.item(),
+            "market": market.item(),
+            "success": success.item()
+        }
         
         
         

@@ -1,30 +1,26 @@
 import json
 import pyro
-from pyro.distributions import Bernoulli,constraints,Beta
+from pyro.distributions import Bernoulli,constraints,Beta,Binomial
 from pyro.infer import SVI, Trace_ELBO
 from pyro.optim import Adam
 import torch
 
-#(i / x) * 100 >gdp
 class DATA:
     def __init__(self):
         self.loadAllData()
-        self.love = round(self.take_loveforit()/100,4)
-        self.country = self.take_country()
-        self.popularity = self.take_popularity()
+        self.love = round(self.take_loveforit()/100,4) 
         if self.love<50:
             accuracy = 5
         else:
-            accuracy = 15    
-        self.love = self.do_svi_for_love(self.love,accuracy,2000)
-        self.prev_success = self.do_svi_for_prev_success()
+            accuracy = 15 
+        #self.love = self.do_svi_for_love(self.love,accuracy,2000)
+        self.country = self.take_country()
+        self.popularity = self.take_popularity()
         self.job = self.have_job()
-        
-        
         
         temp = self.take_previoussuccess()#total , success
         self.prev_success = (temp[1]/temp[0])
-        
+        #self.prev_success = self.do_svi_for_prev_success()
     
     def loadAllData(self):
         with open("country.json") as f:
@@ -64,16 +60,19 @@ class DATA:
                     except Exception as e:
                         print(e)
                         print("Something went wrong") 
-                if job[1]<=85:
+                monthly_gdp = self.gdp / 12  # Convert total GDP to monthly
+
+
+                if job[1] <= 0.005 * monthly_gdp:        # Poor: ~0.5% of monthly GDP
                     job[1] = 1
-                elif job<=200:
+                elif job[1] <= 0.015 * monthly_gdp:      # Lower-Middle: 1.5%
                     job[1] = 2
-                elif job<=500:
+                elif job[1] <= 0.03 * monthly_gdp:       # Middle-Middle: 3%
                     job[1] = 3
-                elif job<=1200:
+                elif job[1] <= 0.06 * monthly_gdp:       # Upper-Middle: 6%
                     job[1] = 4
-                else:
-                    job[1] = 5            
+                else:                                    # Rich: more than 6% of monthly GDP
+                    job[1] = 5         
                          
 
                 break        
@@ -162,7 +161,7 @@ class DATA:
         return answer
 
     def do_svi_for_love(self,observed,accuracy,steps=3000):
-        
+        pyro.clear_param_store()
         #model part
         def make_model(observed, accuracy):
             def modelEXE():
@@ -178,7 +177,7 @@ class DATA:
             alpha_q = pyro.param("alpha_P_love", torch.tensor(2.0), constraint=constraints.positive)
             beta_q = pyro.param("beta_P_love", torch.tensor(2.0), constraint=constraints.positive)
             pyro.sample("P_love", Beta(alpha_q, beta_q))
-            pyro.clear_param_store()
+            
         #svi part
         modelEXE = make_model(observed, accuracy)
         svi = SVI(model=modelEXE, guide=guideEXE,
@@ -194,26 +193,23 @@ class DATA:
         return sample_p
 
 
-    def do_svi_for_prev_success(self,observed,accuracy,steps=3000):
-        
+    def do_svi_for_prev_success(self,steps=3000):
+        pyro.clear_param_store()
         #model part
-        def make_model(observed, accuracy):
+        def make_model():
             def modelEXE():
-                true_prob = pyro.sample("P_prev_success", Beta(2.0, 2.0))
+                possibleprob = pyro.sample("P_prev_success",Beta(2.0,2.0))#prob of not
+                pyro.sample("observed",Binomial(total_count=self.prev_success[0],probs = possibleprob),obs=torch.tensor(self.prev_success[1]))
                 
-                # We assume observed proportion is a noisy measurement of the true probability
-                # So we model it as Beta-distributed around true_prob (with fixed concentration)
-                pyro.sample("observed_P_prev_success", Beta(true_prob * accuracy, (1 - true_prob) * accuracy),  # 20 = confidence in proportion
-                                    obs=torch.tensor(observed))  # the observed proportion (e.g., 79%)
             return modelEXE
         #guide part
         def guideEXE():
             alpha_q = pyro.param("alpha_P_prev_success", torch.tensor(2.0), constraint=constraints.positive)
             beta_q = pyro.param("beta_P_prev_success", torch.tensor(2.0), constraint=constraints.positive)
             pyro.sample("P_prev_success", Beta(alpha_q, beta_q))
-            pyro.clear_param_store()
+            
         #svi part
-        modelEXE = make_model(observed, accuracy)
+        modelEXE = make_model()
         svi = SVI(model=modelEXE, guide=guideEXE,
                 optim=Adam({"lr": 0.01}), loss=Trace_ELBO())
 
@@ -228,11 +224,13 @@ class DATA:
 
     
 class mainpart:
-    def __init__(self,job,loan,choice,love):
+    def __init__(self,job,loan,choice,love,gdp,prev_success):
         self.have_job = job #[have?,income]
         self.loan = loan #0 or 1
         self.choice = choice #1,2,3,4,5 #popularity
         self.love = love
+        self.gdp = gdp # countryGDP max
+        self.prev_success = prev_success
 
     
     
@@ -240,6 +238,7 @@ class mainpart:
     def network(self):
         P_job = [0.3,0.45,0.56,0.66,0.8,0.91]#No job  poor mediumpoor middlefair middleupper upper
         job = pyro.sample("job", Bernoulli(P_job), obs=torch.tensor(self.have_job)) 
+        
         P_loan = torch.where(job==torch.tensor(1.0),0.4,0.6)
         loan = pyro.sample("loan",Bernoulli(P_loan),obs=torch.tensor(self.loan))#will he repay it
         i,j = int(job.item()),int(loan.item())
@@ -249,16 +248,25 @@ class mainpart:
         input_investment = pyro.sample("investment",Bernoulli(P_investment))
         
         
-        P_popularity = [None,0.3,0.4,0.7,0.4,0.4][self.choice]
-        popularity = pyro.sample("popularity",Bernoulli(P_popularity))
-        
         P_love = self.love
         love = pyro.sample("love",Bernoulli(P_love))
         
-        P_prev_success = None
-        prev_success = pyro.sample("prev_success",P_prev_success)
-        cpt_hardwork = [[]]
+        P_prev_success = self.prev_success
+        prev_success = pyro.sample("prev_success",Bernoulli(P_prev_success))
         
+        i,j = int(love.item()),int(prev_success.item())
+        cpt_hardwork = [[0.40,0.60],[0.54,0.67]]
+        
+        
+        P_popularity = [None,0.3,0.4,0.7,0.4,0.4][self.choice] #none is just a place holder
+        popularity = pyro.sample("popularity",Bernoulli(P_popularity))
+        P_gdp = (self.gdp[0]/self.gdp[1]) # gdp/max  
+        gdp = pyro.sample("gdp",Bernoulli(P_gdp))
+        
+        i,j = int(popularity.item()),int(gdp.item())
+        cpt_market = [[0.23,0.5],[0.47,0.71]]
+        P_market = cpt_market[j][i]
+        market = pyro.sample("market",Bernoulli(P_market))
         
         
         

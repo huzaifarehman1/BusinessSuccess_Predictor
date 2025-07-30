@@ -1,51 +1,81 @@
 import json
 import pyro
 from pyro.distributions import Bernoulli,constraints,Beta,Binomial
-from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import SVI, Trace_ELBO,Importance, EmpiricalMarginal
 from pyro.optim import Adam
+import task_managing_queue
 import torch
 
 class DATA:
     def __init__(self):
         self.loadAllData()
+        task = task_managing_queue.task_queue()
         self.love = round(self.take_loveforit()/100,4) 
-        if self.love<50:
+        if self.love<0.5:
             accuracy = 5
         else:
             accuracy = 15 
-        #self.love = self.do_svi_for_love(self.love,accuracy,2000)
+        task.start_work()
+        if self.love!=0:
+            love_result = task.add_task(self.do_svi_for_love,(self.love,accuracy,2000))
+  
+        self.prev_success = self.take_previoussuccess()#total , success
+        prev_success_result = task.add_task( self.do_svi_for_prev_success)
+        
         self.country = self.take_country()
+        self.gdp = [0,0]
+        self.gdp[0] = self.gdp_list[self.country]
+        self.gdp[1] = self.gdp_list["MAX"]
         self.popularity = self.take_popularity()
         self.job = self.have_job()
+        self.loan = self.have_loan()
         
-        temp = self.take_previoussuccess()#total , success
-        self.prev_success = (temp[1]/temp[0])
-        #self.prev_success = self.do_svi_for_prev_success()
+        task.stop_work()
+        print("Wait compiling inputs")
+        if self.love!=0:
+            self.love = love_result.get()
+            
+        self.prev_success = prev_success_result.get()
+        task.shutdown()
+        
+        
     
     def loadAllData(self):
         with open("country.json") as f:
-            self.gdp = json.load(f)
+            self.gdp_list = json.load(f)
 
     def take_country(self):
-        print("Enter your country")
+        print("Enter your country: ")
         while True:
             country = input("")
             country = country.lower().replace(" ","")
-            if country not in self.gdp:
-                print("Country do not exist")
+            if country not in self.gdp_list:
+                print("Country do not exist: ")
                 continue
             return country
 
+    def have_loan(self):
+        print("Did you take any loan: ")
+        while True:
+            yesORno = input("yes or no:  ").lower().replace(" ","")
+            if yesORno not in ["yes","no"]:
+                print("reply with only ",end="")
+                continue    
+            if yesORno=="yes":
+                return 1
+            else:
+                return 0
+    
     def have_job(self):
         job = 0
-        print("DO you have a job")
+        print("DO you have a job: ")
         while True:
             yesORno = input("yes or no ?").lower().replace(" ","")
             if yesORno not in ["yes","no"]:
                 print("reply with only ",end="")
                 continue    
             if yesORno=="yes":
-                print("What is your income in dollors(monthly)")
+                print("What is your income in dollors(monthly): ")
                 while True:
                     try:
                         choice = float(input())
@@ -59,7 +89,7 @@ class DATA:
                     except Exception as e:
                         print(e)
                         print("Something went wrong") 
-                monthly_gdp = self.gdp / 12  # Convert total GDP to monthly
+                monthly_gdp = self.gdp[0] / 12  # Convert total GDP to monthly
 
 
                 if job <= 0.005 * monthly_gdp:        # Poor: ~0.5% of monthly GDP
@@ -93,7 +123,7 @@ class DATA:
         print("5:high popularity")
         
         while True:
-            print("Enter your choice (1,2,3,4,5)")
+            print("Enter your choice (1,2,3,4,5): ")
             try:
                 choice = int(input())
                 if choice not in [1,2,3,4,5]:
@@ -109,7 +139,7 @@ class DATA:
                 continue   
 
     def take_loveforit(self):
-        print(f"How much {"%"} do you love it ")
+        print(f"How much {"%"} do you love it: ")
         while True:
             try:
                 choice = float(input())
@@ -126,7 +156,7 @@ class DATA:
                 print("Something went wrong")    
 
     def take_previoussuccess(self):
-        print("How many business have you started before:")
+        print("How many business have you started before: ")
         answer = [0,0]
         while True:
             try:
@@ -147,7 +177,7 @@ class DATA:
                 choice = int(input())
                 if choice<0:
                     print("number must be >= 0")   
-                elif choice<answer[0]:
+                elif choice>answer[0]:
                     print(f"must be less than total number of business ({answer[0]})")
                 else:
                     answer[1] = choice    
@@ -169,7 +199,7 @@ class DATA:
                 # We assume observed proportion is a noisy measurement of the true probability
                 # So we model it as Beta-distributed around true_prob (with fixed concentration)
                 pyro.sample("observed_P_love", Beta(true_prob * accuracy, (1 - true_prob) * accuracy),  # 20 = confidence in proportion
-                                    obs=torch.tensor(observed))  # the observed proportion (e.g., 79%)
+                                    obs=torch.tensor(float(observed)))  # the observed proportion (e.g., 79%)
             return modelEXE
         #guide part
         def guideEXE():
@@ -198,7 +228,7 @@ class DATA:
         def make_model():
             def modelEXE():
                 possibleprob = pyro.sample("P_prev_success",Beta(2.0,2.0))#prob of not
-                pyro.sample("observed",Binomial(total_count=self.prev_success[0],probs = possibleprob),obs=torch.tensor(self.prev_success[1]))
+                pyro.sample("observed",Binomial(total_count=self.prev_success[0],probs = possibleprob),obs=torch.tensor(float(self.prev_success[1])))
                 
             return modelEXE
         #guide part
@@ -236,14 +266,12 @@ class mainpart:
         
     def network(self):
         P_job_table = [0.3,0.45,0.56,0.66,0.8,0.91]#No job  poor mediumpoor middlefair middleupper upper
-        if self.have_job[0]==0:
-            P_job = P_job_table[0]
-        else:
-            P_job = P_job_table[1]    
-        job = pyro.sample("job", Bernoulli(P_job), obs=torch.tensor(self.have_job)) 
+        
+        P_job = P_job_table[self.have_job]   
+        job = pyro.sample("job", Bernoulli(P_job), obs=torch.tensor(float(self.have_job))) 
         
         P_loan = torch.where(job==torch.tensor(1.0),0.4,0.6)
-        loan = pyro.sample("loan",Bernoulli(P_loan),obs=torch.tensor(self.loan))#will he repay it
+        loan = pyro.sample("loan",Bernoulli(P_loan),obs=torch.tensor(float(self.loan)))#will he repay it
         i,j = int(job.item()),int(loan.item())
         cpt_job_loan = [[0.2,0.4],
                         [0.8,0.6]]
@@ -276,8 +304,29 @@ class mainpart:
         market = pyro.sample("market",Bernoulli(P_market))
         
         i,j,k = int(market.item()),int(hardwork.item()),int(input_investment.item())
-        cpt_success = []
-        P_success = cpt_success[i][j][k]
+        cpt_success = [
+                        [  # gdp = 0
+                            [  # market = 0
+                                [0.16, 0.39],  # hardwork = 0 → investment = 0, 1
+                                [0.29, 0.48],  # hardwork = 1 → investment = 0, 1
+                            ],
+                            [  # market = 1
+                                [0.34, 0.60],# hardwork = 0 → investment = 0, 1
+                                [0.50, 0.77],# hardwork = 1 → investment = 0, 1
+                            ],
+                        ],
+                        [  # gdp = 1
+                            [  # market = 0
+                                [0.40, 0.50],# hardwork = 0 → investment = 0, 1
+                                [0.45, 0.86],# hardwork = 1 → investment = 0, 1
+                            ],
+                            [  # market = 1
+                                [0.63, 0.81],# hardwork = 0 → investment = 0, 1
+                                [0.75, 0.94],# hardwork = 1 → investment = 0, 1
+                            ],
+                        ],
+                    ]
+        P_success = cpt_success[gdp_value][i][j][k]
         success = pyro.sample("success",Bernoulli(P_success))
         
         return {
@@ -293,9 +342,33 @@ class mainpart:
             "success": success.item()
         }
         
+    def infer_success(self, num_samples=1000):
+        # Assume self.network already includes observations for conditioning
+        posterior = Importance(self.network, num_samples=num_samples).run()
+        
+        # Get all "success" samples (bools or 0/1 floats)
+        success_vals = [
+            posterior.exec_traces[i].nodes["success"]["value"]
+            for i in range(num_samples)
+        ]
+        
+        # Convert to floats and average
+        success_prob = sum(float(val) for val in success_vals) / num_samples
+        return round(success_prob, 4)
+        
+if __name__ == "__main__":
+        dataclass = DATA()
+        job = dataclass.job
+        loan = dataclass.loan
+        popularity = dataclass.popularity
+        love = dataclass.love
+        gdp = dataclass.gdp
+        prev_success = dataclass.prev_success
+        
+        Bayesian_network = mainpart(job,loan,popularity,love,gdp,prev_success) 
+                   
+        answer = Bayesian_network.infer_success(1500)
+        print(f"Your business have a {answer}{"%"} chance of success")
         
         
-        
-        
-                
-    
+            
